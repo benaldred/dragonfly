@@ -15,17 +15,7 @@ Given /^a Rails (.+) application set up for using dragonfly$/ do |version|
   raise "Problem setting up Rails app" unless `
     cd #{fixture_path(version)} &&
     rm -rf #{RAILS_APP_NAME} &&
-    ../rails _#{version}_ #{RAILS_APP_NAME} -m template.rb`
-end
-
-When /^I use the Rails (.+) generator to set up dragonfly$/ do |version|
-  raise "Problem using the generator" unless `
-    cd #{fixture_path(version)}/#{RAILS_APP_NAME} &&
-    ./script/generate dragonfly_app images`
-end
-
-When /^I use the provided (.+) initializer$/ do |version|
-  FileUtils.cp("#{FIXTURES_PATH}/dragonfly_setup.rb", "#{app_path(version)}/config/initializers")
+    rails _#{version}_ #{RAILS_APP_NAME} -m template.rb`
 end
 
 Then /^the cucumber features in my Rails (.+) app should pass$/ do |version|

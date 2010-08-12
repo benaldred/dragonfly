@@ -17,10 +17,6 @@ Image thumbnails in Rails, hosted on Heroku with S3 storage
 {http://heroku.com Heroku} is a commonly used platform for hosting Rack-based websites.
 The following assumes your site is set up for deployment onto Heroku.
 
-As explained in {file:UsingWithRails}, we can use a generator to create an initializer for setting up Dragonfly.
-
-    ./script/generate dragonfly_app images
-
 The default configuration won't work out of the box for Heroku, because
 
 - Heroku doesn't allow saving files to the filesystem (although it does use tempfiles)
@@ -31,46 +27,47 @@ Amazon's {http://aws.amazon.com/s3 S3} is a commonly used platform for storing d
 
 The following assumes you have an S3 account set up, and know your provided 'access key' and 'secret'.
 
-Assuming we don't bother with any caching for development/testing environments, our environment.rb then has:
+### Rails 2.3
+
+environment.rb:
 
     config.gem 'rmagick', :lib => 'RMagick'
-    config.gem 'dragonfly', :source => "http://www.gemcutter.org"
+    gem 'aws-s3', :lib => 'aws/s3'
+    config.gem 'dragonfly'
 
-(these are ignored by Heroku but you might want them locally)
-
-The gems file for Heroku, `.gems`, has
+and
+.gems:
 
     dragonfly
+    aws-s3
 
-(rmagick not needed because it is already installed)
+### Rails 3
 
-Then in our configuration initializer, we replace
+Gemfile:
 
-    c.datastore.configure do |d|
-      d.root_path = "#{Rails.root}/public/system/dragonfly/#{Rails.env}"
-    end
+    gem 'rmagick', '2.12.2', :require => 'RMagick'
+    gem 'aws-s3', :require => 'aws/s3'
+    gem 'dragonfly'
 
-with
+Apparently to use Bundler you need to switch to the 'Bamboo' stack - see {http://docs.heroku.com/bamboo}
 
-    # Use S3 for production
-    if Rails.env == 'production'
-      c.datastore = Dragonfly::DataStorage::S3DataStore.new
-      c.datastore.configure do |d|
-        d.bucket_name = 'my_s3_bucket_name'
-        d.access_key_id = ENV['S3_KEY'] || raise("ENV variable 'S3_KEY' needs to be set")
-        d.secret_access_key = ENV['S3_SECRET'] || raise("ENV variable 'S3_SECRET' needs to be set")
-      end
-    # and filesystem for other environments
-    else
-      c.datastore.configure do |d|
-        d.root_path = "#{Rails.root}/public/system/dragonfly/#{Rails.env}"
-      end
-    end
+### All versions
 
-We've left the datastore as {Dragonfly::DataStorage::FileDataStore FileDataStore} for non-production environments.
+Initializer (e.g. config/initializers/dragonfly.rb):
 
-As you can see we've used `ENV` to store the S3 access key and secret to avoid having them in the repository.
-Heroku has a {http://docs.heroku.com/config-vars way of setting these} using the command line (we only have to do this once).
+    require 'dragonfly'
+    app = Dragonfly::App[:images]
+    app.configure_with(Dragonfly::Config::HerokuRailsImages, 'my_bucket_name')
+    Dragonfly.active_record_macro(:image, app)
+
+The datastore remains as the {Dragonfly::DataStorage::FileDataStore FileDataStore} for non-production environments.
+
+environment.rb (application.rb in Rails 3):
+
+    config.middleware.insert_after 'Rack::Lock', 'Dragonfly::Middleware', :images
+
+We don't store the S3 access key and secret in the repository, rather we use Heroku's
+{http://docs.heroku.com/config-vars config variables} using the command line (we only have to do this once).
 
 From your app's directory:
 
@@ -80,8 +77,8 @@ Obviously you replace 'XXXXXXXXX' with your access key and secret.
 
 Now you can benefit use Dragonfly in the normal way, benefitting from super-fast images served straight from Heroku's cache!
 
-The only downside is that Heroku's cache is cleared every time you deploy, so if this is an issue you may want to look into using something like 
-a Memcached add-on, or maybe an after-deploy hook for hitting specific Dragonfly urls you want to cache, etc.
+NOTE: HEROKU'S CACHE IS CLEARED EVERY TIME YOU DEPLOY.
+If this is an issue you may want to look into using something like a Memcached add-on, or maybe an after-deploy hook for hitting specific Dragonfly urls you want to cache, etc.
 It won't be a problem for most sites though.
 
 
@@ -91,33 +88,25 @@ Although Dragonfly is normally concerned with processing and encoding, you may w
 (e.g. .doc, .xls, .pdf files, etc.) without processing or encoding them, so as to still benefit from the {file:ActiveRecord ActiveRecord Extensions} API.
 
 The below shows how to do it in Rails, but the principles are the same in any context.
-Let's generate a configuration for a Dragonfly App called 'attachments'
 
-    ./script/generate dragonfly_app attachments
+Initializer, e.g. config/initializers/dragonfly.rb:
 
-This generates an initializer for configuring the Dragonfly App 'attachments'.
+    require 'dragonfly'
 
-We won't be using RMagick or Rack::Cache (as there is no processing), so our environment.rb only has:
-
-    config.gem 'dragonfly',  :source => 'http://gemcutter.org'
-
-and in the generated configuration, we DELETE the line
-
-    app.configure_with(Dragonfly::RMagickConfiguration)
-
-Then in the configure block, we add the lines
-
-    c.url_handler.configure do |u|
-      # ...
-      u.protect_from_dos_attacks = false
+    app = Dragonfly::App[:attachments]
+    app.configure_with(Dragonfly::Config::RailsDefaults) do |c|
+      c.register_analyser(Dragonfly::Analysis::FileCommandAnalyser)
+      c.register_encoder(Dragonfly::Encoding::TransparentEncoder)
     end
-    c.register_analyser(Dragonfly::Analysis::FileCommandAnalyser)
-    c.register_encoder(Dragonfly::Encoding::TransparentEncoder)
+    Dragonfly.active_record_macro(:attachment, app)
 
-We don't need to protect the urls from Denial-of-service attacks as we aren't doing any expensive processing.
 The {Dragonfly::Analysis::FileCommandAnalyser FileCommandAnalyser} is needed to know the mime-type of the content,
 and the {Dragonfly::Encoding::TransparentEncoder TransparentEncoder} is like a 'dummy' encoder which does nothing
-(the way to switch off encoding may change in the future).
+(the way to switch off encoding will be simplified in future versions of Dragonfly).
+
+environment.rb (application.rb in Rails 3):
+
+    config.middleware.insert_after 'Rack::Lock', 'Dragonfly::Middleware', :attachments
 
 If a user uploads a file called 'report.pdf', then normally the original file extension will be lost.
 Thankfully, to record it is as easy as adding an 'ext' column as well as the usual uid column to our migration
@@ -150,7 +139,7 @@ Each {Dragonfly::App Dragonfly App} has a 'generate' method, which returns an {D
 The actual generation is delegated to the registered processors (along with any args passed in).
 
 For example, if our app is registered with the {Dragonfly::Processing::RMagickProcessor RMagickProcessor} (which is already done if using with one of
-the Rails helper files/generators)
+the RMagick/RailsImage configurations)
 
     Dragonfly::App[:my_app].register_processor(Dragonfly::Processing::RMagickProcessor)
 
@@ -167,30 +156,34 @@ A common technique for making sure a specific font is displayed on a website is 
 
 We can easily use Dragonfly to do this on-the-fly.
 
-The {Dragonfly::Processing::RMagickProcessor RMagickProcessor} has a 'text' method, which takes content in the form of text,
-and creates an image of the text, given the options passed in.
+Configuration (e.g. initializer in Rails):
 
-We can also make use of the simple {Dragonfly::DataStorage::TransparentDataStore TransparentDataStore}, where rather than fetch
-data for a given uid, the uid IS the data.
-
-The configuration will look something like:
-
-    Dragonfly::App[:text].configure do |c|
-      c.datastore = Dragonfly::DataStorage::TransparentDataStore.new
-      c.register_analyser(Dragonfly::Analysis::FileCommandAnalyser)
-      c.register_processor(Dragonfly::Processing::RMagickProcessor)
-      c.register_encoder(Dragonfly::Encoding::RMagickEncoder)
-      c.parameters.configure do |p|
-        p.default_format = :png
-        p.default_processing_method = :text
-      end
+    require 'dragonfly'
+    Dragonfly::App[:text].configure_with(Dragonfly::Config::RMagickText) do |c|
+      c.url_handler.path_prefix = '/text'
     end
 
-We need the {Dragonfly::Analysis::FileCommandAnalyser FileCommandAnalyser} for mime-type analysis.
+If using Rails, then in environment.rb (application.rb in Rails 3):
+
+    config.middleware.insert_after 'Rack::Lock', 'Dragonfly::Middleware', :text
+    
+You probably will want to insert Rack::Cache too or use some other caching proxy - see {file:UsingWithRails}.
 
 Then when we visit a url like
 
-    url = Dragonfly::App[:text].url_for('some text', :processing_options => {:font_size => 30, :font_family => 'Monaco'})
+    url = Dragonfly::App[:text].url_for('some text', :text, :font_size => 30, :font_family => 'Monaco')
 
 we get a png image of the text. We could easily wrap this in some kind of helper if we use it often.
 
+This configuration uses the {Dragonfly::Processing::RMagickTextProcessor RMagickTextProcessor} processor.
+Options can be specified either css-like (e.g. `'font-family' => 'Helvetica'`), or with underscore-style symbols
+(e.g. `:font_family => 'Helvetica'`).
+
+Available options are `font` (see {http://www.imagemagick.org/RMagick/doc/draw.html#font}),
+`'font-family'`,
+`'stroke_color'`,
+`'color'`,
+`'font_style'`,
+`'font_stretch'`,
+`'font_weight'` and
+`'padding'` (or `'padding-left'`, `'padding-top'`, etc.)

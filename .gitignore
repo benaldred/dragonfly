@@ -7,3 +7,5 @@ pkg
 doc
 tmp
 fixtures/*/tmp_app
+.ginger
+.bundle

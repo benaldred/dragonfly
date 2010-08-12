@@ -6,18 +6,17 @@ describe Item do
 
   describe "registering dragonfly apps" do
 
-    before(:each) do
-      @app1, @app2 = Dragonfly::App[:images], Dragonfly::App[:videos]
-      ActiveRecord::Base.register_dragonfly_app(:image, @app1)
-      ActiveRecord::Base.register_dragonfly_app(:video, @app2)
-    end
-
+    let(:app1){ Dragonfly::App[:images] }
+    let(:app2){ Dragonfly::App[:videos] }
+    
     it "should return the mapping of apps to attributes" do
+      Dragonfly.active_record_macro(:image, app1)
+      Dragonfly.active_record_macro(:video, app2)
       Item.class_eval do
         image_accessor :preview_image
         video_accessor :trailer_video
       end
-      Item.dragonfly_apps_for_attributes.should == {:preview_image => @app1, :trailer_video => @app2}
+      Item.dragonfly_apps_for_attributes.should == {:preview_image => app1, :trailer_video => app2}
     end
 
   end
@@ -36,7 +35,7 @@ describe Item do
     
       before(:each) do
         @app = Dragonfly::App[:images]
-        ActiveRecord::Base.register_dragonfly_app(:image, @app)
+        Dragonfly.active_record_macro(:image, @app)
         Item.class_eval do
           image_accessor :preview_image
         end
@@ -72,6 +71,24 @@ describe Item do
         end
       end
       
+      describe "when the uid is set manually" do
+        before(:each) do
+          @item.preview_image_uid = 'some_known_uid'
+        end
+        it "should not try to retrieve any data" do
+          @app.datastore.should_not_receive(:retrieve)
+          @item.save!
+        end
+        it "should not try to destroy any data" do
+          @app.datastore.should_not_receive(:destroy)
+          @item.save!
+        end
+        it "should not try to store any data" do
+          @app.datastore.should_not_receive(:store)
+          @item.save!
+        end
+      end
+      
       describe "when there has been some thing assigned but not saved" do
         before(:each) do
           @item.preview_image = "DATASTRING"
@@ -98,6 +115,24 @@ describe Item do
           temp_object.should be_a(Dragonfly::ExtendedTempObject)
           temp_object.data.should == 'DATASTRING'
         end
+        describe "when the uid is set manually" do
+          before(:each) do
+            @item.preview_image_uid = 'some_known_uid'
+          end
+          it "should not try to retrieve any data" do
+            @app.datastore.should_not_receive(:retrieve)
+            @item.save!
+          end
+          it "should not try to destroy any data" do
+            @app.datastore.should_not_receive(:destroy)
+            @item.save!
+          end
+          it "should not try to store any data" do
+            @app.datastore.should_not_receive(:store)
+            @item.save!
+          end
+        end
+        
       end
       
       describe "when something has been assigned and saved" do
@@ -105,7 +140,7 @@ describe Item do
         before(:each) do
           @item.preview_image = "DATASTRING"
           @app.datastore.should_receive(:store).with(a_temp_object_with_data("DATASTRING")).once.and_return('some_uid')
-          @app.datastore.stub!(:store)
+          @app.datastore.stub!(:store).and_return('some_uid')
           @app.datastore.stub!(:destroy)
           @item.save!
         end
@@ -130,6 +165,12 @@ describe Item do
         it "should return the url for the data" do
           @app.should_receive(:url_for).with(@item.preview_image_uid, :arg).and_return('some.url')
           @item.preview_image.url(:arg).should == 'some.url'
+        end
+        
+        it "should destroy the old data when the uid is set manually" do
+          @app.datastore.should_receive(:destroy).with('some_uid')
+          @item.preview_image_uid = 'some_known_uid'
+          @item.save!
         end
         
         describe "when accessed by a new model object" do
@@ -190,6 +231,7 @@ describe Item do
           it "should destroy the data on save" do
             @app.datastore.should_receive(:destroy).with('some_uid')
             @item.save!
+            @item.preview_image.should be_nil
           end
           it "should destroy the old data on destroy" do
             @app.datastore.should_receive(:destroy).with('some_uid')
@@ -216,7 +258,7 @@ describe Item do
 
     before(:all) do
       @app = Dragonfly::App[:images]
-      ActiveRecord::Base.register_dragonfly_app(:image, @app)
+      Dragonfly.active_record_macro(:image, @app)
     end
     
     describe "validates_presence_of" do
@@ -284,10 +326,12 @@ describe Item do
           validates_property :mime_type, :of => :preview_image, :in => ['how/special', 'how/crazy'], :if => :its_friday
           validates_property :mime_type, :of => [:other_image, :yet_another_image], :as => 'how/special'
           validates_property :number_of_Gs, :of => :preview_image, :in => (0..2)
+          validates_property :mime_type, :of => :otra_imagen, :in => ['que/pasa', 'illo/tio'], :message => "tipo de contenido incorrecto. Que chungo tio"
 
           image_accessor :preview_image
           image_accessor :other_image
           image_accessor :yet_another_image
+          image_accessor :otra_imagen
 
           def its_friday
             true
@@ -349,6 +393,12 @@ describe Item do
         }.should raise_error(ArgumentError)
       end
 
+      it "should allow for custom messages" do
+        @item.otra_imagen = "WRONG TYPE"
+        @item.should_not be_valid
+        @item.errors[:otra_imagen].should match_ar_error("tipo de contenido incorrecto. Que chungo tio")
+      end
+
     end
 
     describe "validates_mime_type_of" do
@@ -374,7 +424,7 @@ describe Item do
         def number_of_As(temp_object); temp_object.data.count('A'); end
       end
       @app.register_analyser(custom_analyser)
-      ActiveRecord::Base.register_dragonfly_app(:image, @app)
+      Dragonfly.active_record_macro(:image, @app)
       Item.class_eval do
         image_accessor :preview_image
       end
@@ -500,6 +550,55 @@ describe Item do
           @item.preview_image.eggbert
         }.should raise_error(NoMethodError)
       end
+    end
+  end
+  
+  describe "inheritance" do
+    
+    before(:all) do
+      @app = Dragonfly::App[:images]
+      @app2 = Dragonfly::App[:egg]
+      Dragonfly.active_record_macro(:image, @app)
+      Dragonfly.active_record_macro(:egg, @app2)
+      Car.class_eval do
+        image_accessor :image
+      end
+      Photo.class_eval do
+        egg_accessor :image
+      end
+
+      @base_class = Car
+      @subclass = Class.new(Car){ image_accessor :reliant_image }
+      @subclass_with_module = Class.new(Car) do
+        include Module.new
+        image_accessor :reliant_image
+      end
+      @unrelated_class = Photo
+    end
+
+    it "should allow assigning base class accessors" do
+      @base_class.create! :image => 'blah'
+    end
+    it "should not allow assigning subclass accessors in the base class" do
+      @base_class.new.should_not respond_to(:reliant_image=)
+    end
+    it "should allow assigning base class accessors in the subclass" do
+      @subclass.create! :image => 'blah'
+    end
+    it "should allow assigning subclass accessors in the subclass" do
+      @subclass.create! :reliant_image => 'blah'
+    end
+    it "should allow assigning base class accessors in the subclass, even if it has mixins" do
+      @subclass_with_module.create! :image => 'blah'
+    end
+    it "should allow assigning subclass accessors in the subclass, even if it has mixins" do
+      @subclass_with_module.create! :reliant_image => 'blah'
+    end
+    it "return the correct apps for each accessors, even when names clash" do
+      @base_class.dragonfly_apps_for_attributes.should == {:image => @app}
+      @subclass.dragonfly_apps_for_attributes.should == {:image => @app, :reliant_image => @app}
+      @subclass_with_module.dragonfly_apps_for_attributes.should == {:image => @app, :reliant_image => @app}
+      @unrelated_class.dragonfly_apps_for_attributes.should == {:image => @app2}
     end
   end
 
